@@ -23,6 +23,7 @@ import sys
 import argparse
 import subprocess
 import requests
+import re
 
 # Disable warning for insecure https
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
@@ -41,6 +42,7 @@ STATE_TEXT = ['Ok', 'Warning', 'Critical', 'Unknown']
 
 STATE = STATE_OK
 OUTPUT_MESSAGE = ''
+OUTPUT_MESSAGE_PERFDATA = ''
 
 PARSER = argparse.ArgumentParser(description='Openshift check pods')
 PARSER.add_argument("-proto", "--protocol", type=str,
@@ -67,10 +69,26 @@ PARSER.add_argument("--check_nodes", action='store_true',
                     help='Check status of all nodes')
 PARSER.add_argument("--check_pods", action='store_true',
                     help='Check status of pods ose-haproxy-router and ose-docker-registry')
+PARSER.add_argument("--exclude_pods", type=str,
+                    help='Exclude pods where the name contains the string passed in argument, find in the field deploymentconfig labels str|str|str ')
+PARSER.add_argument("--check_pvs", action='store_true',
+                    help='Check status of persistent volume  ')     
 PARSER.add_argument("--check_scheduling", action='store_true',
                     help='Check if your nodes is in SchedulingDisabled stat. Only warning')
 PARSER.add_argument("--check_labels", action='store_true',
                     help='Check if your nodes have your "OFFLINE" label. Only warning (define by --label_offline)')
+PARSER.add_argument("--warn_avai_pv", type=str,
+                    help='Warning threshold for "Available" Persistent Volumes',
+                    default=1)
+PARSER.add_argument("--crit_avai_pv", type=str,
+                    help='Critical threshold for "Available" Persistent Volumes',
+                    default=0)
+PARSER.add_argument("--warn_relea_pv", type=str,
+                    help='Warning threshold for "Released" Persistent Volumes',
+                    default=1)
+PARSER.add_argument("--crit_relea_pv", type=str,
+                    help='Critical threshold for "Released" Persistent Volumes',
+                    default=0)
 PARSER.add_argument("--label_offline", type=str,
                     help='Your "OFFLINE" label name (Default: retiring)',
                     default="retiring")
@@ -99,11 +117,16 @@ class Openshift(object):
                  debug=False,
                  verbose=False,
                  namespace='default',
-                 base_api='/api/v1'):
+                 base_api='/api/v1',
+                 warn_avai_pv=None,
+                 crit_avai_pv=None,
+                 warn_relea_pv=None,
+                 crit_relea_pv=None,
+                 exclude_pods=None):
 
         self.os_STATE = 0
         self.os_OUTPUT_MESSAGE = ''
-
+        self.os_OUTPUT_MESSAGE_PERFDATA = ''
         self.proto = proto
         self.host = host
         self.port = port
@@ -112,6 +135,12 @@ class Openshift(object):
         self.debug = debug
         self.verbose = verbose
         self.namespace = namespace
+        self.warn_avai_pv = warn_avai_pv
+        self.crit_avai_pv = crit_avai_pv
+        self.warn_relea_pv = warn_relea_pv
+        self.crit_relea_pv = crit_relea_pv
+        self.exclude_pods = exclude_pods
+        
         # Remove the trailing / to avoid user issue
         self.base_api = base_api.rstrip('/')
 
@@ -204,7 +233,7 @@ class Openshift(object):
             self.os_STATE = STATE_UNKNOWN
             self.os_OUTPUT_MESSAGE = ' Unable to find nodes data in the response.'
             return
-
+        print parsed_json["items"]
         all_nodes_names = ''
         for item in parsed_json["items"]:
             all_nodes_names += '%s ' % item["metadata"]["name"]
@@ -232,10 +261,10 @@ class Openshift(object):
         if self.os_STATE == 0:
             self.os_OUTPUT_MESSAGE += "%s [Ready]" % (all_nodes_names)
 
-    def get_pods(self, namespace=None):
+    def get_pods(self, namespace=None,exclude_pods=None):
 
         self.os_OUTPUT_MESSAGE += ' Pods: '
-
+        
         if namespace:
             self.namespace = namespace
         api_pods = '%s/namespaces/%s/pods' % (self.base_api, self.namespace)
@@ -243,6 +272,7 @@ class Openshift(object):
         parsed_json = self.get_json(api_pods)
 
         pods = {}
+        podc ={}
 
         if self.base_api == '/api/v1beta3':
             status_condition = 'Condition'
@@ -257,25 +287,58 @@ class Openshift(object):
 
         for item in parsed_json["items"]:
             # print item["metadata"]["name"]
-            # print item["metadata"]["labels"]["deploymentconfig"]
+            print item["metadata"]["labels"]["deploymentconfig"]
+            print item["metadata"]["labels"]["deployment"]
             # print item["status"]["phase"]
             # print item["status"][status_condition][0]["type"]
             # print item["status"][status_condition][0]["status"]
-
-            try:
-                if item["status"][status_condition][0]["status"] != "True":
-                    if 'deploymentconfig' in item["metadata"]["labels"].keys():
-                        pods[item["metadata"]["labels"]["deploymentconfig"]] = "%s: [%s] " % (item["metadata"]["name"],
-                                                                                              item["status"]["phase"],
-                                                                                              item["status"][status_condition][0]["status"])
-                        self.os_STATE = 2
-                else:
-                    if 'deploymentconfig' in item["metadata"]["labels"].keys():
-                        pods[item["metadata"]["labels"]["deploymentconfig"]] = "%s: [%s] " % (item["metadata"]["name"],
-                                                                                         item["status"]["phase"])
-            except:
-                pass
-
+            podc.setdefault('pod',[])
+            if exclude_pods:
+                regex=exclude_pods.split(",")
+                for search in  regex:                
+                    print '%s [search] %s [pod] ' % (search,item["metadata"]["name"])
+                    #exclude = re.search(r'search', item["metadata"]["name"])
+                    #exclude = re.compile(item["metadata"]["name"])
+                    #exclude.search(search)
+                    exclude = re.match(search, item["metadata"]["name"])                    
+                    print '%s [exclude] ' % exclude 
+                    if exclude:
+                        #print '%s [regex found] ' % search
+                        continue                    
+                    try:                        
+                        if item["status"][status_condition][0]["status"] != "True":
+                            if 'deploymentconfig' in item["metadata"]["labels"].keys():
+                                pods[item["metadata"]["labels"]["deploymentconfig"]] = "%s: [%s] " % (item["metadata"]["name"],
+                                                                                                      item["status"]["phase"],
+                                                                                                      item["status"][status_condition][0]["status"])
+                                self.os_STATE = 2
+                        else:
+                            if 'deploymentconfig' in item["metadata"]["labels"].keys():
+                                pods[item["metadata"]["labels"]["deploymentconfig"]] = "%s: [%s] " % (item["metadata"]["name"],
+                                                                                                 item["status"]["phase"])
+                            podc['pod'].append(1)                                                                     
+                    except:
+                        pass
+            else:
+                try:
+                    if item["status"][status_condition][0]["status"] != "True":
+                        if 'deploymentconfig' in item["metadata"]["labels"].keys():
+                            pods[item["metadata"]["labels"]["deploymentconfig"]] = "%s: [%s] " % (item["metadata"]["name"],
+                                                                                                      item["status"]["phase"],
+                                                                                                      item["status"][status_condition][0]["status"])
+                            self.os_STATE = 2
+                    else:
+                        if 'deploymentconfig' in item["metadata"]["labels"].keys():
+                            pods[item["metadata"]["labels"]["deploymentconfig"]] = "%s: [%s] " % (item["metadata"]["name"],
+                                                                                                 item["status"]["phase"])
+                        podc['pod'].append(1)
+                except:
+                    pass
+                        
+        
+        for key,values in podc.items():                
+                self.os_OUTPUT_MESSAGE_PERFDATA +=  'PODS=%spv;0;100' % (sum(values))
+        
         registry_dc_name = 'docker-registry'
         router_dc_name = 'router'
 
@@ -290,7 +353,101 @@ class Openshift(object):
         else:
             self.os_OUTPUT_MESSAGE += '%s [Missing] ' % router_dc_name
             self.os_STATE = 2
+ 
+ 
+ 
+    def get_pvs(self,warn_avai_pv,crit_avai_pv,warn_relea_pv,crit_relea_pv):
 
+        self.os_OUTPUT_MESSAGE += ' PV '
+
+        api_pvs = '%s/persistentvolumes' % self.base_api
+
+        parsed_json = self.get_json(api_pvs)
+
+        pvs = {}
+
+        if self.base_api == '/api/v1beta3':
+            status_condition = 'Condition'
+        else:
+            status_condition = 'conditions'
+  
+  # Return unknow if we can't find datas
+        if 'items' not in parsed_json:
+            self.os_STATE = STATE_UNKNOWN
+            self.os_OUTPUT_MESSAGE = ' Unable to find nodes data in the response.'
+            return        
+        pvs={}
+        pvsc={}
+        #for item in parsed_json["items"]:        
+        avl=0
+        bnd=0
+        rls=0
+        i=0
+        for item in parsed_json["items"]:
+            #print item["metadata"]["name"]
+            #print item["spec"]["capacity"]["storage"]
+            #print item["spec"]["nfs"]["path"]
+            #print item["status"]["phase"]
+            capacity = re.findall( r'\d+', item["spec"]["capacity"]["storage"], re.MULTILINE)
+            pvs[item["metadata"]["name"]] = "%s;%d" % (item["status"]["phase"],
+                                                                                int(capacity[0]))
+            pvsc.setdefault(int(capacity[0]),[])                                                                                                                                                       
+            try:
+                if item["status"]["phase"] == 'Available':                                                                                   
+                        avl += 1                       
+                        pvsc[int(capacity[0])].append(1)                                        
+                elif item["status"]["phase"] == 'Bound':
+                        bnd += 1                       
+                        pvsc[int(capacity[0])].append(1)                   
+                elif item["status"]["phase"] == 'Released':
+                        rls += 1                        
+                        pvsc[int(capacity[0])].append(1)                                 
+            except:
+                pass
+        
+        #if self.os_STATE == 0:
+            #self.os_OUTPUT_MESSAGE += 'OK'
+        #print pvs        
+        #print pvsc.keys
+        #for key,values in pvsc.items():
+            #print sum(values)
+        #print rls
+        #print bnd   
+        #print avl
+                
+        if  int(crit_avai_pv) >= avl:  # CRITICAL
+            for key,values in pvsc.items():                
+                self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))                
+            self.os_STATE = 2
+            self.os_OUTPUT_MESSAGE += '%s Available' % avl
+            
+        elif int(warn_avai_pv) >= avl:  # WARNING
+             for key,values in pvsc.items():                
+                self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))
+             self.os_STATE = 1            
+             self.os_OUTPUT_MESSAGE += '%s Available' % avl
+             
+        else:
+            for key,values in pvsc.items():                
+                self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))
+            if int(crit_relea_pv) or int(warn_relea_pv):
+                if int(crit_relea_pv) >= rls: # CRITICAL
+                    self.os_STATE = 2
+                    self.os_OUTPUT_MESSAGE += '%s Release' % rls
+                elif int(warn_relea_pv) >= rls: # WARNING
+                    self.os_STATE = 1
+                    self.os_OUTPUT_MESSAGE += '%s Release' % rls
+                else:
+                    self.os_STATE = 0
+                    self.os_OUTPUT_MESSAGE += '%s Available %s Release' % (avl,rls)
+            else: 
+                self.os_STATE = 0
+                self.os_OUTPUT_MESSAGE += '%s Available' % avl
+        
+        self.os_OUTPUT_MESSAGE_PERFDATA += ' Available=%spv;0;100 Release=%spv;0;100 Bound=%spv;0;100' % (avl,rls,bnd)
+        
+       
+            
     def get_labels(self, label_offline):
 
         self.os_OUTPUT_MESSAGE += ' Nodes: '
@@ -374,13 +531,22 @@ if __name__ == "__main__":
                      token=ARGS.token,
                      tokenfile=ARGS.tokenfile,
                      proto=ARGS.protocol,
-                     base_api=ARGS.base_api)
+                     base_api=ARGS.base_api,
+                     warn_avai_pv=ARGS.warn_avai_pv,
+                     crit_avai_pv=ARGS.crit_avai_pv,
+                     warn_relea_pv=ARGS.warn_relea_pv,
+                     crit_relea_pv=ARGS.crit_relea_pv,
+                     exclude_pods=ARGS.exclude_pods
+                     )
 
     if ARGS.check_nodes:
         myos.get_nodes()
 
     if ARGS.check_pods:
-        myos.get_pods()
+        myos.get_pods('',ARGS.exclude_pods)
+
+    if ARGS.check_pvs:
+        myos.get_pvs(ARGS.warn_avai_pv,ARGS.crit_avai_pv,ARGS.warn_relea_pv,ARGS.crit_relea_pv)
 
     if ARGS.check_labels:
         myos.get_labels(ARGS.label_offline)
@@ -393,7 +559,7 @@ if __name__ == "__main__":
 
     try:
         STATE = myos.os_STATE
-        OUTPUT_MESSAGE = myos.os_OUTPUT_MESSAGE
+        OUTPUT_MESSAGE = myos.os_OUTPUT_MESSAGE + '|' + myos.os_OUTPUT_MESSAGE_PERFDATA
 
         print "%s:%s" % (STATE_TEXT[STATE], OUTPUT_MESSAGE)
         sys.exit(STATE)
