@@ -263,7 +263,7 @@ class Openshift(object):
 
     def get_pods(self, namespace=None,exclude_pods=None):
 
-        self.os_OUTPUT_MESSAGE += ' Pods: '
+        #self.os_OUTPUT_MESSAGE += ' Pods: '
         
         if namespace:
             self.namespace = namespace
@@ -287,8 +287,8 @@ class Openshift(object):
 
         for item in parsed_json["items"]:
             # print item["metadata"]["name"]
-            print item["metadata"]["labels"]["deploymentconfig"]
-            print item["metadata"]["labels"]["deployment"]
+            # print item["metadata"]["labels"]["deploymentconfig"]
+            # print item["metadata"]["labels"]["deployment"]
             # print item["status"]["phase"]
             # print item["status"][status_condition][0]["type"]
             # print item["status"][status_condition][0]["status"]
@@ -296,12 +296,12 @@ class Openshift(object):
             if exclude_pods:
                 regex=exclude_pods.split(",")
                 for search in  regex:                
-                    print '%s [search] %s [pod] ' % (search,item["metadata"]["name"])
+                    #print '%s [search] %s [pod] ' % (search,item["metadata"]["name"])
                     #exclude = re.search(r'search', item["metadata"]["name"])
                     #exclude = re.compile(item["metadata"]["name"])
                     #exclude.search(search)
                     exclude = re.match(search, item["metadata"]["name"])                    
-                    print '%s [exclude] ' % exclude 
+                    #print '%s [exclude] ' % exclude 
                     if exclude:
                         #print '%s [regex found] ' % search
                         continue                    
@@ -337,8 +337,9 @@ class Openshift(object):
                         
         
         for key,values in podc.items():                
-                self.os_OUTPUT_MESSAGE_PERFDATA +=  'PODS=%spv;0;100' % (sum(values))
-        
+                self.os_OUTPUT_MESSAGE_PERFDATA +=  'PODS=%spod(s);0;100' % (sum(values))
+                self.os_OUTPUT_MESSAGE += ' %s PODS ' % sum(values)
+                
         registry_dc_name = 'docker-registry'
         router_dc_name = 'router'
 
@@ -398,51 +399,50 @@ class Openshift(object):
                         pvsc[int(capacity[0])].append(1)                                        
                 elif item["status"]["phase"] == 'Bound':
                         bnd += 1                       
-                        pvsc[int(capacity[0])].append(1)                   
+                        #pvsc[int(capacity[0])].append(1)                   
                 elif item["status"]["phase"] == 'Released':
                         rls += 1                        
-                        pvsc[int(capacity[0])].append(1)                                 
+                        #pvsc[int(capacity[0])].append(1)                                 
             except:
                 pass
         
-        #if self.os_STATE == 0:
-            #self.os_OUTPUT_MESSAGE += 'OK'
         #print pvs        
-        #print pvsc.keys
-        #for key,values in pvsc.items():
-            #print sum(values)
+        #print pvsc.keys       
         #print rls
         #print bnd   
         #print avl
-                
-        if  int(crit_avai_pv) >= avl:  # CRITICAL
-            for key,values in pvsc.items():                
+        for key,values in pvsc.items():
+            #print values
+            if  int(crit_avai_pv) >= sum(values):  # CRITICAL
+                #for key,values in pvsc.items():                
                 self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))                
-            self.os_STATE = 2
-            self.os_OUTPUT_MESSAGE += '%s Available' % avl
-            
-        elif int(warn_avai_pv) >= avl:  # WARNING
-             for key,values in pvsc.items():                
+                self.os_STATE = 2
+                self.os_OUTPUT_MESSAGE += '%s(G) %s Not Available ' % (key,sum(values))
+                
+            elif int(warn_avai_pv) >= sum(values):  # WARNING
+                 #for key,values in pvsc.items():                
+                 self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))
+                 self.os_STATE = 1            
+                 self.os_OUTPUT_MESSAGE += '%s(G) %s Not Available ' % (key,sum(values))
+                 
+            else:
+                #for key,values in pvsc.items():                
                 self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))
-             self.os_STATE = 1            
-             self.os_OUTPUT_MESSAGE += '%s Available' % avl
-             
-        else:
-            for key,values in pvsc.items():                
-                self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))
-            if int(crit_relea_pv) or int(warn_relea_pv):
-                if int(crit_relea_pv) >= rls: # CRITICAL
-                    self.os_STATE = 2
-                    self.os_OUTPUT_MESSAGE += '%s Release' % rls
-                elif int(warn_relea_pv) >= rls: # WARNING
-                    self.os_STATE = 1
-                    self.os_OUTPUT_MESSAGE += '%s Release' % rls
-                else:
+                if int(crit_relea_pv) or int(warn_relea_pv):
+                    if int(crit_relea_pv) >= rls: # CRITICAL
+                        self.os_STATE = 2
+                        self.os_OUTPUT_MESSAGE += '%s Release ' % rls
+                    elif int(warn_relea_pv) >= rls: # WARNING
+                        self.os_STATE = 1
+                        self.os_OUTPUT_MESSAGE += '%s Release ' % rls
+                    else:
+                        self.os_STATE = 0
+                        #self.os_OUTPUT_MESSAGE += '%s(G) Available %s Release ' % (key,rls)
+                        self.os_OUTPUT_MESSAGE += '%s(G) %s Available ' % (key,sum(values))
+                else: 
                     self.os_STATE = 0
-                    self.os_OUTPUT_MESSAGE += '%s Available %s Release' % (avl,rls)
-            else: 
-                self.os_STATE = 0
-                self.os_OUTPUT_MESSAGE += '%s Available' % avl
+                    self.os_OUTPUT_MESSAGE += '%s(G) Available ' % key
+            
         
         self.os_OUTPUT_MESSAGE_PERFDATA += ' Available=%spv;0;100 Release=%spv;0;100 Bound=%spv;0;100' % (avl,rls,bnd)
         
