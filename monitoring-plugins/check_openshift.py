@@ -68,11 +68,13 @@ PARSER.add_argument("-tf", "--tokenfile", type=str,
 PARSER.add_argument("--check_nodes", action='store_true',
                     help='Check status of all nodes')
 PARSER.add_argument("--check_pods", action='store_true',
-                    help='Check status of pods ose-haproxy-router and ose-docker-registry')
-PARSER.add_argument("--exclude_pods", type=str,nargs='+', default=[],
-                    help='Exclude pods where the name contains the string passed in argument, find in the field deploymentconfig labels str,str,str ')
-PARSER.add_argument("--exclude_pvs", type=str,nargs='+', default=[],
-                    help='Exclude pvs where the name contains the value passed in argument')
+                    help='Check status of pods ose-haproxy-router and ose-docker-registry')             
+PARSER.add_argument("--exclude_pods", type=str, nargs='+', default=[],
+                    help='Exclude pods where the name contains the string passed in argument, find in the field deploymentconfig labels str str str ')
+PARSER.add_argument("--exclude_pvs", type=str, nargs='+', default=[],
+                    help='Exclude pvs where the name contains the value passed in argument , --exclude_pvs 10 100 5  ')
+PARSER.add_argument("--exclude_nodes", type=str, nargs='+', default=[],
+                    help='Exclude nodes where the name contains the value passed in argument , --exclude_nodes hostname ')					
 PARSER.add_argument("--check_pvs", action='store_true',
                     help='Check status of persistent volume  ')     
 PARSER.add_argument("--check_scheduling", action='store_true',
@@ -125,6 +127,7 @@ class Openshift(object):
                  warn_relea_pv=None,
                  crit_relea_pv=None,
                  exclude_pods=None,
+                 exclude_nodes=None,
                  exclude_pvs=None):
 
         self.os_STATE = 0
@@ -143,6 +146,7 @@ class Openshift(object):
         self.warn_relea_pv = warn_relea_pv
         self.crit_relea_pv = crit_relea_pv
         self.exclude_pods = exclude_pods
+        self.exclude_nodes = exclude_nodes
         self.exclude_pvs = exclude_pvs
         
         # Remove the trailing / to avoid user issue
@@ -225,44 +229,54 @@ class Openshift(object):
         if self.os_STATE == 0:
             self.os_OUTPUT_MESSAGE += "%s [Schedulable]" % (all_nodes_names)
 
-    def get_nodes(self):
+    def get_nodes(self,exclude_nodes=[]):
 
         self.os_OUTPUT_MESSAGE += ' Nodes: '
 
         api_nodes = '%s/nodes' % self.base_api
         parsed_json = self.get_json(api_nodes)
-
+        nodec ={}
+        nodec.setdefault('nodef',[])
+        nodec.setdefault('noder',[])
         # Return unknow if we can't find datas
         if 'items' not in parsed_json:
             self.os_STATE = STATE_UNKNOWN
             self.os_OUTPUT_MESSAGE = ' Unable to find nodes data in the response.'
             return        
         all_nodes_names = ''
+        
+                    
         for item in parsed_json["items"]:
-            all_nodes_names += '%s ' % item["metadata"]["name"]
-
-            # print item["metadata"]["name"]
-            # print item["status"]["addresses"][0]["address"]
-            # print item["status"]["conditions"][0]["type"]
-            # print item["status"]["conditions"][0]["status"]
-            # print item["status"]["conditions"][0]["reason"]
-
-            status_ready = {}
-            for condition in item["status"]["conditions"]:
-                if condition["type"] == "Ready":
-                    status_ready = condition
-                    break
-
+            if exclude_nodes:
+                for search in  exclude_nodes:
+                    exclude = re.match(search, item["metadata"]["name"])                    
+                    if exclude:
+                        continue
+                    all_nodes_names += '%s ' % item["metadata"]["name"]
+                    status_ready = {}
+                    for condition in item["status"]["conditions"]:
+                        if condition["type"] == "Ready":
+                            status_ready = condition
+                            nodec['noder'].append(1)
+                            break
             # if status not ready
             if status_ready["status"] != "True":
+                nodec['nodef'].append(1)
                 self.os_STATE = 2
                 self.os_OUTPUT_MESSAGE += "%s/%s: [%s %s] " % (item["metadata"]["name"],
                                                                item["status"]["addresses"][0]["address"],
                                                                status_ready["status"],
                                                                status_ready["reason"])
 
+        nodet=(sum(nodec['noder']))+(sum(nodec['nodef']))        
         if self.os_STATE == 0:
-            self.os_OUTPUT_MESSAGE += "%s [Ready]" % (all_nodes_names)
+            for key,values in nodec.items():
+                if nodec['noder'] or  nodec['nodef']:
+                    if key == 'nodef':
+                        self.os_OUTPUT_MESSAGE_PERFDATA +=  'NODES_FAILED=%snode(s);0;%s ' % (sum(values),nodet)
+                    elif key == 'noder':
+                        self.os_OUTPUT_MESSAGE_PERFDATA +=  'NODES_READY=%snode(s);0;%s ' % (sum(values),nodet)
+        self.os_OUTPUT_MESSAGE += "%s [Ready]" % (all_nodes_names)
 
     def get_pods(self, namespace=None,exclude_pods=[]):
              
@@ -288,11 +302,9 @@ class Openshift(object):
         for item in parsed_json["items"]:            
             podc.setdefault('pod',[])
             if exclude_pods:                
-                for search in  exclude_pods:
-                    print 'search:'+search+'-> pod:'+item["metadata"]["name"]
+                for search in  exclude_pods:                    
                     exclude = re.match(search, item["metadata"]["name"])                    
-                    if exclude:
-                        print 'result:'+exclude    
+                    if exclude:                           
                         continue                    
                     try:                        
                         if item["status"][status_condition][0]["status"] != "True":
@@ -344,18 +356,12 @@ class Openshift(object):
             self.os_OUTPUT_MESSAGE += '%s [Missing] ' % router_dc_name
             self.os_STATE = 2
  
- 
- 
     def get_pvs(self,warn_avai_pv,crit_avai_pv,warn_relea_pv,crit_relea_pv,exclude_pvs=[]):
 
         self.os_OUTPUT_MESSAGE += ' PV '
-
         api_pvs = '%s/persistentvolumes' % self.base_api
-
         parsed_json = self.get_json(api_pvs)
-
         pvs = {}
-
         if self.base_api == '/api/v1beta3':
             status_condition = 'Condition'
         else:
@@ -375,7 +381,7 @@ class Openshift(object):
             capacity = re.findall( r'\d+', item["spec"]["capacity"]["storage"], re.MULTILINE)
             pvs[item["metadata"]["name"]] = "%s;%d" % (item["status"]["phase"],
                                                                                 int(capacity[0]))
-            pvsc.setdefault(int(capacity[0]),[])                                                                                                                                                       
+            pvsc.setdefault(int(capacity[0]),[])
             try:
                 if item["status"]["phase"] == 'Available':                                                                                   
                         avl += 1
@@ -388,12 +394,11 @@ class Openshift(object):
                 pass
         
         #Remove PV in array with argument exclude_pvs
-        for remove_pvs in exclude_pvs:             
+        for remove_pvs in exclude_pvs:
              if int(remove_pvs) in pvsc:
-                del pvsc[int(remove_pvs)]                  
+                del pvsc[int(remove_pvs)]
         
-        for key,values in pvsc.items():
-            #print values
+        for key,values in pvsc.items():            
             if  int(crit_avai_pv) >= sum(values):  # CRITICAL                             
                 self.os_OUTPUT_MESSAGE_PERFDATA +=  ' PV(%s)=%spv;0;100' % (key,sum(values))                
                 self.os_STATE = 2
@@ -516,17 +521,18 @@ if __name__ == "__main__":
                      warn_relea_pv=ARGS.warn_relea_pv,
                      crit_relea_pv=ARGS.crit_relea_pv,
                      exclude_pods=ARGS.exclude_pods,
+                     exclude_nodes=ARGS.exclude_nodes,
                      exclude_pvs=ARGS.exclude_pvs
                      )
 
     if ARGS.check_nodes:
-        myos.get_nodes()
+        myos.get_nodes(ARGS.exclude_nodes)
 
     if ARGS.check_pods:
         myos.get_pods('',ARGS.exclude_pods)
 
     if ARGS.check_pvs:
-        myos.get_pvs(ARGS.warn_avai_pv,ARGS.crit_avai_pv,ARGS.warn_relea_pv,ARGS.crit_relea_pv,ARGS.exclude_pvs)
+        myos.get_pvs(ARGS.warn_avai_pv,ARGS.crit_avai_pv,ARGS.warn_relea_pv,ARGS.crit_relea_pv,ARGS.exclude_pvs)        
 
     if ARGS.check_labels:
         myos.get_labels(ARGS.label_offline)
