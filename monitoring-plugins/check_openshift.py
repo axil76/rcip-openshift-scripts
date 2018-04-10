@@ -68,13 +68,15 @@ PARSER.add_argument("-tf", "--tokenfile", type=str,
 PARSER.add_argument("--check_nodes", action='store_true',
                     help='Check status of all nodes')
 PARSER.add_argument("--check_pods", action='store_true',
-                    help='Check status of pods ose-haproxy-router and ose-docker-registry')             
+                    help='Check status of pods ose-haproxy-router and ose-docker-registry')
+PARSER.add_argument("--exclude_nodes", type=str, nargs='+', default=[],
+                    help='Exclude nodes where the name contains the string passed in argument, --exclude_nodes str,str,str ')                    
 PARSER.add_argument("--exclude_pods", type=str, nargs='+', default=[],
                     help='Exclude pods where the name contains the string passed in argument, find in the field deploymentconfig labels str str str ')
-PARSER.add_argument("--exclude_pvs", type=str, nargs='+', default=[],
-                    help='Exclude pvs where the name contains the value passed in argument , --exclude_pvs 10 100 5  ')
-PARSER.add_argument("--exclude_nodes", type=str, nargs='+', default=[],
-                    help='Exclude nodes where the name contains the value passed in argument , --exclude_nodes hostname ')					
+#PARSER.add_argument("--exclude_pvs", type=str, nargs='+', default=[],
+#                    help='Exclude pvs where the name contains the value passed in argument , --exclude_pvs 10 100 5  ')
+PARSER.add_argument("--exclude_pvs", type=str, nargs='?', default=False,
+                    help='Exclude pvs where the name contains the value passed in argument , --exclude_pvs 10,100,5  ')
 PARSER.add_argument("--check_pvs", action='store_true',
                     help='Check status of persistent volume  ')     
 PARSER.add_argument("--check_scheduling", action='store_true',
@@ -356,7 +358,7 @@ class Openshift(object):
             self.os_OUTPUT_MESSAGE += '%s [Missing] ' % router_dc_name
             self.os_STATE = 2
  
-    def get_pvs(self,warn_avai_pv,crit_avai_pv,warn_relea_pv,crit_relea_pv,exclude_pvs=[]):
+    def get_pvs(self,warn_avai_pv,crit_avai_pv,warn_relea_pv,crit_relea_pv,exclude_pvs):
 
         self.os_OUTPUT_MESSAGE += ' PV '
         api_pvs = '%s/persistentvolumes' % self.base_api
@@ -394,9 +396,10 @@ class Openshift(object):
                 pass
         
         #Remove PV in array with argument exclude_pvs
-        for remove_pvs in exclude_pvs:
-             if int(remove_pvs) in pvsc:
-                del pvsc[int(remove_pvs)]
+        remove_pvs = exclude_pvs.split(",")
+        for remove_pv in remove_pvs:
+             if int(remove_pv) in pvsc:
+                del pvsc[int(remove_pv)]
         
         for key,values in pvsc.items():            
             if  int(crit_avai_pv) >= sum(values):  # CRITICAL                             
@@ -521,7 +524,7 @@ if __name__ == "__main__":
                      warn_relea_pv=ARGS.warn_relea_pv,
                      crit_relea_pv=ARGS.crit_relea_pv,
                      exclude_pods=ARGS.exclude_pods,
-                     exclude_nodes=ARGS.exclude_nodes,
+                     exclude_nodes=ARGS.exclude_pods,
                      exclude_pvs=ARGS.exclude_pvs
                      )
 
